@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Run from a lab directory:
+  ../../scripts/lab run [-- ARG ...]
+  ../../scripts/lab profile [EVENTS] [-- ARG ...]
+  ../../scripts/lab record [EVENTS] [-- ARG ...]
+
+The default event is ctimer. Reports are saved in the current lab directory.
+USAGE
+}
+
+usage_error() {
+  usage >&2
+  exit 2
+}
+
+fail() {
+  printf '%s\n' "$1" >&2
+  exit 1
+}
+
+while getopts ':h' option; do
+  case $option in
+    h) usage; exit 0 ;;
+    *) usage_error ;;
+  esac
+done
+shift "$((OPTIND - 1))"
+
+mode=${1:-}
+case $mode in
+  run|profile|record) shift ;;
+  *) usage_error ;;
+esac
+
+events=ctimer
+if [[ $mode != run && $# -gt 0 && $1 != -- ]]; then
+  events=$1
+  shift
+fi
+if (( $# > 0 )); then
+  [[ $1 == -- ]] || usage_error
+  shift
+fi
+
+[[ -f example.sc ]] || fail 'Run this command from a lab directory containing example.sc.'
+command -v scala-cli >/dev/null || fail 'Put scala-cli on PATH before running the lab.'
+scala_options=(run --server=false --java-opt -Xmx256m)
+if [[ $mode == run ]]; then
+  exec scala-cli "${scala_options[@]}" example.sc -- "$@"
+fi
+
+asprof_path=$(type -P asprof) || fail 'Put asprof on PATH before profiling the lab.'
+asprof_path=$(realpath -e -- "$asprof_path") || fail 'Could not resolve the asprof executable on PATH.'
+agent=${asprof_path%/bin/asprof}/lib/libasyncProfiler.so
+[[ -f $agent ]] || fail "Could not find the async-profiler library at $agent"
+
+extension=html
+[[ $mode != record ]] || extension=jfr
+event_name=${events%%,*}
+event_name=${event_name//[^a-zA-Z0-9_-]/_}
+report_stem="profile-$event_name-$(date -u +%Y%m%dT%H%M%S)"
+report="$report_stem.$extension"
+suffix=2
+until (set -o noclobber; : > "$report") 2>/dev/null; do
+  [[ -e $report || -L $report ]] || fail "Could not create report: $report"
+  report="$report_stem-$suffix.$extension"
+  ((suffix += 1))
+done
+printf 'Report: %s\n' "$report"
+exec scala-cli "${scala_options[@]}" \
+  --java-opt "-agentpath:$agent=start,event=$events,file=$PWD/$report" example.sc -- "$@"

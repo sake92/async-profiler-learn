@@ -1,0 +1,7 @@
+.bsp/
+.scala-build/
+/.basamake/
+/.deder/
+/profiles/
+/labs/*/profile-*.html
+/labs/*/profile-*.jfr
